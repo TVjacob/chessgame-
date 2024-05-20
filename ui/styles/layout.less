@@ -1,0 +1,19 @@
+.base-container {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+.component-container {
+  min-height: calc(100vh - 75px);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+@media screen and (min-width: 960px) {
+  padding-left: 50px;
+}
+@media screen and (min-width: 1250px) {
+  .base-layout {
+    padding-left: 145px;
+  }
+}
