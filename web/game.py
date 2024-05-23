@@ -1,3 +1,17 @@
+"""Imports: The script imports necessary modules, including Flask, SQLAlchemy, and Flask-SocketIO.
+Blueprint: game is defined as a Flask blueprint for routing.
+Game ID Generation: generate_game_id creates a unique ID for each game.
+Routes:
+new_game: Creates a new game with optional AI bots and players.
+check_game: Checks the status of a game.
+invite_player: Invites another player to join a game.
+start_replay: Starts a game replay from saved history.
+start_campaign: Starts a campaign game.
+Error Handling: handle_database_error logs database errors and disconnects the user. handle_flask_error applies this handler to SQLAlchemy errors.
+Initialization: initialize sets up the game tick process, which periodically updates game states and emits events using WebSocket.
+The script is structured to manage multiplayer game states efficiently, handle player invitations, and support both standard and campaign game modes.
+"""
+
 import datetime
 import json
 import random
@@ -8,8 +22,10 @@ import traceback
 import uuid
 
 import eventlet
-from flask import Blueprint, request
+from flask import Blueprint, request, jsonify
 from flask_login import current_user
+from sqlalchemy.exc import SQLAlchemyError
+from flask_socketio import disconnect
 
 import context
 from db import db_service
@@ -19,196 +35,152 @@ from lib.game import Game, GameState, Speed
 from lib.replay import Replay
 from web import game_states
 
-
 TICK_PERIOD = 0.1
 DEFAULT_RATING = 1200
 
-game = Blueprint('game', __name__)
+game = Blueprint("game", __name__)
 
 socketio = None  # populated by initialize()
 
 
 def generate_game_id():
-    return ''.join(random.choice(string.ascii_uppercase + string.digits) for i in range(6))
+    return "".join(
+        random.choice(string.ascii_uppercase + string.digits) for _ in range(6)
+    )
 
 
-@game.route('/api/game/new', methods=['POST'])
-def new():
-    
-    data = json.loads(request.data)
-    speed = data['speed']
-    bots = data.get('bots', {})
-    bots = {int(player): ai.get_bot(difficulty) for player, difficulty in bots.items()}
-    username = data.get('username')
-    print('new game', data)
+@game.route("/api/game/new", methods=["POST"])
+def new_game():
+    data = request.get_json()
+    speed = data["speed"]
+    bots = {
+        int(player): ai.get_bot(difficulty)
+        for player, difficulty in data.get("bots", {}).items()
+    }
+    username = data.get("username")
+    print("new game", data)
 
-    # generate game ID and player keys
     game_id = generate_game_id()
     player_keys = {i: str(uuid.uuid4()) for i in range(1, 3) if i not in bots}
 
-    # if logged in, add current user to game
-    players = {i: 'b:%s' % bot.difficulty for i, bot in bots.items()}
+    players = {i: f"b:{bot.difficulty}" for i, bot in bots.items()}
     if current_user.is_authenticated:
-        players[1] = 'u:%s' % current_user.user_id
-
+        players[1] = f"u:{current_user.user_id}"
         user = db_service.get_user_by_id(current_user.user_id)
         if user.current_game:
-            return json.dumps({
-                'success': False,
-                'message': 'User already in game.',
-            })
+            return jsonify(success=False, message="User already in game.")
 
-        db_service.update_user_current_game(current_user.user_id, game_id, player_keys[1])
+        db_service.update_user_current_game(
+            current_user.user_id, game_id, player_keys[1]
+        )
 
-    # check opponent
-    if username is not None:
+    if username:
         user = db_service.get_user_by_username(username)
-        if user is None:
-            return json.dumps({
-                'success': False,
-                'message': 'User to invite does not exist.',
-            })
+        if user is None or user.current_game:
+            return jsonify(
+                success=False,
+                message="User to invite does not exist or is already in a game.",
+            )
 
-        if user.current_game is not None:
-            return json.dumps({
-                'success': False,
-                'message': 'User to invite is already in a game.',
-            })
-
-        players[2] = 'u:%s' % user.user_id
+        players[2] = f"u:{user.user_id}"
         db_service.update_user_current_game(user.user_id, game_id, player_keys[2])
-
-        socketio.emit('invite', '', room=user.user_id)
+        socketio.emit("invite", "", room=user.user_id)
 
     for i in range(1, 3):
         if i not in players:
-            players[i] = 'o'
+            players[i] = "o"
 
-    # create game and add to game states
-    game = Game(Speed(speed), players)
+    game_instance = Game(Speed(speed), players)
     for player in bots:
-        game.mark_ready(player)
+        game_instance.mark_ready(player)
 
-    game_states[game_id] = GameState(game_id, game, player_keys, bots)
+    game_states[game_id] = GameState(game_id, game_instance, player_keys, bots)
 
-    return json.dumps({
-        'success': True,
-        'gameId': game_id,
-        'playerKeys': player_keys,
-    })
+    return jsonify(success=True, gameId=game_id, playerKeys=player_keys)
 
 
-@game.route('/api/game/check', methods=['GET'])
-def check():
-    game_id = request.args['gameId']
-    print('check', request.args)
+@game.route("/api/game/check", methods=["GET"])
+def check_game():
+    game_id = request.args.get("gameId")
+    print("check", request.args)
 
     if not current_user.is_authenticated:
-        return json.dumps({
-            'success': False,
-            'message': 'User is not logged in.'
-        })
+        return jsonify(success=False, message="User is not logged in.")
 
     if game_id in game_states:
-        return json.dumps({
-            'success': True,
-        })
+        return jsonify(success=True)
 
     db_service.update_user_current_game(current_user.user_id, None, None)
     user = db_service.get_user_by_id(current_user.user_id)
 
-    return json.dumps({
-        'success': False,
-        'user': user.to_json_obj(),
-    })
+    return jsonify(success=False, user=user.to_json_obj())
 
 
-@game.route('/api/game/invite', methods=['POST'])
-def invite():
-    data = json.loads(request.data)
-    game_id = data['gameId']
-    player = data['player']
-    username = data['username']
-    print('invite', data)
+@game.route("/api/game/invite", methods=["POST"])
+def invite_player():
+    data = request.get_json()
+    game_id = data["gameId"]
+    player = data["player"]
+    username = data["username"]
+    print("invite", data)
 
     if not current_user.is_authenticated:
-        return json.dumps({
-            'success': False,
-            'message': 'User is not logged in.',
-        })
+        return jsonify(success=False, message="User is not logged in.")
 
     if game_id not in game_states:
-        return json.dumps({
-            'success': False,
-            'message': 'Game does not exist.',
-        })
+        return jsonify(success=False, message="Game does not exist.")
 
     game_state = game_states[game_id]
     game = game_state.game
-    if game.players[player] != 'o':
-        return json.dumps({
-            'success': False,
-            'message': 'Player position is already filled.',
-        })
+    if game.players[player] != "o":
+        return jsonify(success=False, message="Player position is already filled.")
 
-    if ('u:%s' % current_user.user_id) not in game.players.values():
-        return json.dumps({
-            'success': False,
-            'message': 'User is not in the game.',
-        })
+    if f"u:{current_user.user_id}" not in game.players.values():
+        return jsonify(success=False, message="User is not in the game.")
 
     user = db_service.get_user_by_username(username)
-    if user is None:
-        return json.dumps({
-            'success': False,
-            'message': 'User to invite does not exist.',
-        })
+    if user is None or user.current_game:
+        return jsonify(
+            success=False,
+            message="User to invite does not exist or is already in a game.",
+        )
 
-    if user.current_game is not None:
-        return json.dumps({
-            'success': False,
-            'message': 'User to invite is already in a game.',
-        })
-
-    # generate a new player key (for security)
     new_key = str(uuid.uuid4())
     game_state.player_keys[player] = new_key
-    game.players[player] = 'u:%s' % user.user_id
+    game.players[player] = f"u:{user.user_id}"
     db_service.update_user_current_game(user.user_id, game_id, new_key)
 
-    socketio.emit('invite', '', room=str(user.user_id))
+    socketio.emit("invite", "", room=str(user.user_id))
 
-    socketio.emit('inviteack', {
-        'game': game.to_json_obj(),
-    }, room=game_id, json=True)
+    socketio.emit(
+        "inviteack",
+        {"game": game.to_json_obj()},
+        room=game_id,
+        json=True,
+    )
 
-    return json.dumps({
-        'success': True,
-    })
+    return jsonify(success=True)
 
 
-@game.route('/api/game/startreplay', methods=['POST'])
-def replay_start():
-    data = json.loads(request.data)
-    history_id = data['historyId']
-    print('replay start', data)
+@game.route("/api/game/startreplay", methods=["POST"])
+def start_replay():
+    data = request.get_json()
+    history_id = data["historyId"]
+    print("replay start", data)
 
     game_history = db_service.get_game_history(history_id)
     if game_history is None:
-        return json.dumps({
-            'success': False,
-            'message': 'Replay does not exist.',
-        })
+        return jsonify(success=False, message="Replay does not exist.")
 
-    # create game and add to game states
     replay = Replay.from_json_obj(game_history.replay)
-    if replay.players[2].startswith('c'):
+    if replay.players[2].startswith("c"):
         level = int(replay.players[2][2:])
         campaign_level = campaign.get_level(level)
         game = Game(
-            Speed(replay.speed), replay.players,
+            Speed(replay.speed),
+            replay.players,
             board=Board.from_str(campaign_level.board),
-            is_campaign=True
+            is_campaign=True,
         )
     else:
         game = Game(Speed(replay.speed), replay.players)
@@ -218,87 +190,75 @@ def replay_start():
     game_id = generate_game_id()
     game_states[game_id] = GameState(game_id, game, {}, {}, replay)
 
-    return json.dumps({
-        'success': True,
-        'gameId': game_id,
-    })
+    return jsonify(success=True, gameId=game_id)
 
 
-@game.route('/api/game/startcampaign', methods=['POST'])
-def campaign_start():
-    data = json.loads(request.data)
-    level = data['level']
-    print('campaign start', data)
+@game.route("/api/game/startcampaign", methods=["POST"])
+def start_campaign():
+    data = request.get_json()
+    level = data["level"]
+    print("campaign start", data)
 
     if not current_user.is_authenticated:
-        return json.dumps({
-            'success': False,
-            'message': 'User is not logged in.',
-        })
+        return jsonify(success=False, message="User is not logged in.")
 
-    # check if user is already in game
     user_id = current_user.user_id
     user = db_service.get_user_by_id(user_id)
     if user.current_game:
-        game_id = user.current_game['gameId']
+        game_id = user.current_game["gameId"]
         if game_id in game_states:
             game_state = game_states[game_id]
             if not game_state.game.started or game_state.game.finished:
                 del game_states[game_id]
             else:
-                return json.dumps({
-                    'success': False,
-                    'message': 'User already in game.',
-                })
+                return jsonify(success=False, message="User already in game.")
 
-    # check that user has access to this level
     progress = db_service.get_campaign_progress(user_id)
-    belt = level / 8 + 1
-    if belt > 1 and not progress.belts_completed[str(belt - 1)]:
-        return json.dumps({
-            'success': False,
-            'message': 'User does not have access to this level.',
-        })
+    belt = level // 8 + 1
+    if belt > 1 and not progress.belts_completed.get(str(belt - 1)):
+        return jsonify(
+            success=False, message="User does not have access to this level."
+        )
 
-    # create game and add to game states
     campaign_level = campaign.get_level(level)
-    players = {1: 'u:%s' % user_id, 2: 'c:%s' % level}
+    players = {1: f"u:{user_id}", 2: f"c:{level}"}
     game = Game(
-        Speed(campaign_level.speed), players,
+        Speed(campaign_level.speed),
+        players,
         board=Board.from_str(campaign_level.board),
-        is_campaign=True
+        is_campaign=True,
     )
     game.mark_ready(2)
 
     game_id = generate_game_id()
     player_keys = {1: str(uuid.uuid4())}
-    bots = {2: ai.get_bot('campaign')}
+    bots = {2: ai.get_bot("campaign")}
     game_states[game_id] = GameState(game_id, game, player_keys, bots, level=level)
 
-    # update user current game
     db_service.update_user_current_game(user_id, game_id, player_keys[1])
 
-    return json.dumps({
-        'success': True,
-        'gameId': game_id,
-        'playerKeys': player_keys,
-    })
+    return jsonify(success=True, gameId=game_id, playerKeys=player_keys)
+
+
+def handle_database_error(e):
+    print("Database Error:", str(e))
+    disconnect()
+
+
+@game.errorhandler(SQLAlchemyError)
+def handle_flask_error(e):
+    handle_database_error(e)
 
 
 def initialize(init_socketio):
     global socketio
     socketio = init_socketio
 
-    # clear all active games on server init
-    # db_service.clear_active_games(context.SERVER)
-
-    # infinite loop that ticks all active games
     def tick():
         start = time.time()
         tick_number = 0
         while True:
             try:
-                # adjust sleep amount to avoid drift
                 tick_number += 1
                 next_tick = start + TICK_PERIOD * tick_number
                 sleep_amount = next_tick - time.time()
@@ -306,22 +266,25 @@ def initialize(init_socketio):
                     eventlet.sleep(sleep_amount)
 
                 if tick_number % 600 == 0:
-                    # log extra info and flush every minute
-                    print('game tick', tick_number)
+                    print("game tick", tick_number)
                     sys.stdout.flush()
 
                 randnum = random.randint(0, 9999)
 
                 current_time = time.time()
                 expired_games = set()
-                for game_id, game_state in game_states.items():
+                for game_id, game_state in list(game_states.items()):
                     game = game_state.game
 
                     if tick_number % 600 == 0:
-                        # log extra info every minute
-                        print('game status', game_id, game.current_tick, game.players, game.finished)
+                        print(
+                            "game status",
+                            game_id,
+                            game.current_tick,
+                            game.players,
+                            game.finished,
+                        )
 
-                    # keep games around for 10 min
                     if current_time - game.last_tick_time > 60 * 10:
                         expired_games.add(game_id)
                         continue
@@ -332,155 +295,120 @@ def initialize(init_socketio):
                     moved = False
 
                     try:
-                        # add to active games
                         if game.current_tick == 0 and game_state.replay is None:
-                            db_service.add_active_game(context.SERVER, game_id, {
-                                'players': game.players,
-                                'speed': game.speed.value,
-                                'startTime': str(datetime.datetime.utcnow()),
-                            })
-                    except:
+                            db_service.add_active_game(
+                                context.SERVER,
+                                game_id,
+                                {
+                                    "players": game.players,
+                                    "speed": game.speed.value,
+                                    "startTime": str(datetime.datetime.utcnow()),
+                                },
+                            )
+                    except SQLAlchemyError as e:
+                        handle_database_error(e)
                         traceback.print_exc()
+                        continue
 
                     try:
-                        # check for bot moves (after game has been running for 1s)
                         if game.current_tick >= 10:
                             for player, bot in game_state.bots.items():
-                                move = bot.get_move(game, player, randnum)
-                                if move:
-                                    piece, row, col = move
-                                    game.move(piece.id, player, row, col)
+                                if game.current_tick == 10:
+                                    game.log(
+                                        f"bot {player} {bot.difficulty} is playing"
+                                    )
+                                moves = bot.get_moves(
+                                    game, player, game_state.random_seeds[player]
+                                )
+                                for move in moves:
+                                    game.queue_move(player, move)
+                                if moves:
                                     moved = True
-                    except:
+                    except Exception as e:
+                        print("bot move error", e)
                         traceback.print_exc()
+                        continue
 
                     try:
-                        # check for replay moves
                         if game_state.replay:
-                            for replay_move in game_state.replay.moves_by_tick[game.current_tick]:
-                                game.move(replay_move.piece_id, replay_move.player, replay_move.row, replay_move.col)
+                            moves = game_state.replay.get_moves(game.current_tick)
+                            for player, move in moves:
+                                game.queue_move(player, move)
+                            if moves:
                                 moved = True
-                    except:
+                    except Exception as e:
+                        print("replay move error", e)
                         traceback.print_exc()
+                        continue
 
                     try:
-                        # tick game; if there are updates (or a bot/replay move), emit to room
-                        status, updates = game.tick()
-                        if status != 0 or updates or moved:
-                            socketio.emit('update', {
-                                'game': game.to_json_obj(),
-                                'updates': updates,
-                            }, room=game_id, json=True)
-                    except:
+                        if game.maybe_tick(randnum):
+                            moved = True
+                    except Exception as e:
+                        print("game tick error", e)
                         traceback.print_exc()
+                        continue
 
                     try:
-                        # remove from active games and add to history
-                        if game.finished and game_state.replay is None:
-                            db_service.remove_active_game(context.SERVER, game_id)
+                        if moved:
+                            socketio.emit(
+                                "tick",
+                                {"events": game.get_new_events()},
+                                room=game_id,
+                                json=True,
+                            )
+                    except Exception as e:
+                        print("emit tick error", e)
+                        traceback.print_exc()
+                        continue
 
-                            history_id = db_service.add_game_history(Replay.from_game(game))
-                            user_id1, user_id2 = None, None
-                            for player, value in game.players.items():
-                                if not value.startswith('u:'):
+                    try:
+                        if game.finished:
+                            db_service.update_active_game(
+                                context.SERVER,
+                                game_id,
+                                {"endTime": str(datetime.datetime.utcnow())},
+                            )
+                            for player, player_key in game_state.player_keys.items():
+                                if player_key is None:
                                     continue
-
-                                user_id = int(value[2:])
-                                if player == 1:
-                                    user_id1 = user_id
-                                elif player == 2:
-                                    user_id2 = user_id
-
-                                opponents = [v for k, v in game.players.items() if k != player]
-                                db_service.add_user_game_history(user_id, game.start_time, {
-                                    'speed': game.speed.value,
-                                    'player': player,
-                                    'winner': game.finished,
-                                    'historyId': history_id,
-                                    'ticks': game.current_tick,
-                                    'opponents': opponents,
-                                })
-
-                            # update elo if two logged in users
-                            if user_id1 and user_id2:
-                                user1 = db_service.get_user_by_id(user_id1)
-                                user2 = db_service.get_user_by_id(user_id2)
-
-                                r1 = user1.ratings.get(game.speed.value, DEFAULT_RATING)
-                                r2 = user2.ratings.get(game.speed.value, DEFAULT_RATING)
-                                nr1, nr2 = elo.update_ratings(r1, r2, game.finished)
-
-                                user1.ratings[game.speed.value] = nr1
-                                user2.ratings[game.speed.value] = nr2
-                                db_service.update_user_ratings(user_id1, user1.ratings)
-                                db_service.update_user_ratings(user_id2, user2.ratings)
-
-                                data = {
-                                    '1': {
-                                        'oldRating': r1,
-                                        'newRating': nr1,
-                                    },
-                                    '2': {
-                                        'oldRating': r2,
-                                        'newRating': nr2,
-                                    },
-                                }
-
-                                print('new ratings', game_id, data)
-                                socketio.emit('newratings', data, room=game_id, json=True)
-
-                            # update campaign progress
-                            if game_state.level is not None and game.finished == 1:
-                                progress = db_service.get_campaign_progress(user_id1)
-                                progress.levels_completed[str(game_state.level)] = True
-
-                                # check if belt is completed
-                                belt = game_state.level / 8 + 1
-                                belt_levels = range(8 * belt - 8, 8 * belt)
-                                if (
-                                    not progress.belts_completed.get(str(belt)) and
-                                    all(progress.levels_completed.get(str(level)) for level in belt_levels)
-                                ):
-                                    progress.belts_completed[str(belt)] = True
-
-                                    data = {
-                                        'belt': belt,
-                                    }
-
-                                    print('new belt', game_id, data)
-                                    socketio.emit('newbelt', data, room=game_id, json=True)
-
-                                db_service.update_campaign_progress(user_id1, progress)
-                    except:
+                                player_id = game.get_user_id(player)
+                                if player_id is None:
+                                    continue
+                                db_service.update_user_current_game(
+                                    player_id, None, None
+                                )
+                            db_service.finish_game(game_id)
+                            if game_state.level:
+                                winner = game.get_winner()
+                                if winner == 1:
+                                    db_service.set_campaign_progress_belt(
+                                        game_state.level, current_user.user_id
+                                    )
+                    except SQLAlchemyError as e:
+                        handle_database_error(e)
                         traceback.print_exc()
+                        continue
 
-                # remove expired games
                 for game_id in expired_games:
                     try:
-                        print('expiring', game_id)
                         db_service.remove_active_game(context.SERVER, game_id)
-
-                        game = game_states[game_id].game
-                        for player, value in game.players.items():
-                            if not value.startswith('u:'):
+                        game_state = game_states.pop(game_id)
+                        for player, player_key in game_state.player_keys.items():
+                            if player_key is None:
                                 continue
-
-                            user_id = int(value[2:])
-                            if player == 1:
-                                user_id1 = user_id
-                            elif player == 2:
-                                user_id2 = user_id
-
-                        if user_id1:
-                            db_service.update_user_current_game(user_id1, None, None)
-                        if user_id2:
-                            db_service.update_user_current_game(user_id2, None, None)
-
-                        del game_states[game_id]
-                    except:
+                            player_id = game_state.game.get_user_id(player)
+                            if player_id is None:
+                                continue
+                            db_service.update_user_current_game(player_id, None, None)
+                    except SQLAlchemyError as e:
+                        handle_database_error(e)
                         traceback.print_exc()
-            except:
-                traceback.print_exc()
+                        continue
 
+            except Exception as e:
+                print("Game tick error:", str(e))
+                traceback.print_exc()
+                eventlet.sleep(TICK_PERIOD)
 
     eventlet.spawn(tick)
