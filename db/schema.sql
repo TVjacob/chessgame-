@@ -1,45 +1,42 @@
-CREATE TABLE users (
-    id            BIGSERIAL PRIMARY KEY,
-    email         TEXT UNIQUE,
-    username      TEXT UNIQUE,
-    picture_url   TEXT,
-    ratings       JSONB,
-    join_time     TIMESTAMP WITHOUT TIME ZONE,
-    last_online   TIMESTAMP WITHOUT TIME ZONE,
-    current_game  JSONB
+CREATE TABLE USERS (
+    ID BIGSERIAL PRIMARY KEY,
+    EMAIL TEXT UNIQUE,
+    USERNAME TEXT UNIQUE,
+    PICTURE_URL TEXT,
+    PASSWORD TEXT,
+    RATINGS JSONB,
+    JOIN_TIME TIMESTAMP WITHOUT TIME ZONE,
+    LAST_ONLINE TIMESTAMP WITHOUT TIME ZONE,
+    CURRENT_GAME JSONB
 );
 
-CREATE INDEX users_last_online_idx ON users (last_online);
+CREATE INDEX USERS_LAST_ONLINE_IDX ON USERS (LAST_ONLINE);
 
-
-CREATE TABLE user_game_history (
-    id           BIGSERIAL PRIMARY KEY,
-    user_id      BIGINT,
-    game_time    TIMESTAMP WITHOUT TIME ZONE,
-    game_info    JSONB
+CREATE TABLE USER_GAME_HISTORY (
+    ID BIGSERIAL PRIMARY KEY,
+    USER_ID BIGINT,
+    GAME_TIME TIMESTAMP WITHOUT TIME ZONE,
+    GAME_INFO JSONB
 );
 
-CREATE INDEX user_game_history_user_id_game_time_idx ON user_game_history (user_id, game_time);
+CREATE INDEX USER_GAME_HISTORY_USER_ID_GAME_TIME_IDX ON USER_GAME_HISTORY (USER_ID, GAME_TIME);
 
-
-CREATE TABLE game_history (
-    id      BIGSERIAL PRIMARY KEY,
-    replay  JSONB
+CREATE TABLE GAME_HISTORY (
+    ID BIGSERIAL PRIMARY KEY,
+    REPLAY JSONB
 );
 
-
-CREATE TABLE active_games (
-    id         BIGSERIAL PRIMARY KEY,
-    server     INT,
-    game_id    TEXT,
-    game_info  JSONB
+CREATE TABLE ACTIVE_GAMES (
+    ID BIGSERIAL PRIMARY KEY,
+    SERVER INT,
+    GAME_ID TEXT,
+    GAME_INFO JSONB
 );
 
-CREATE INDEX active_games_server_game_id_idx ON active_games (server, game_id);
+CREATE INDEX ACTIVE_GAMES_SERVER_GAME_ID_IDX ON ACTIVE_GAMES (SERVER, GAME_ID);
 
-
-CREATE TABLE campaign_progress (
-    id        BIGSERIAL PRIMARY KEY,
-    user_id   BIGINT UNIQUE,
-    progress  JSONB
+CREATE TABLE CAMPAIGN_PROGRESS (
+    ID BIGSERIAL PRIMARY KEY,
+    USER_ID BIGINT UNIQUE,
+    PROGRESS JSONB
 );
