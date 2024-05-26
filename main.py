@@ -398,7 +398,7 @@ def handle_database_error(e):
 if __name__ == "__main__":
     try:
         # app.run(debug=True, port=5000, host="0.0.0.0", use_reloader=True, threaded=True)
-        socketio.run(app, debug=True, port=5000, host="0.0.0.0")
+        socketio.run(app, debug=True, port=5001, host="0.0.0.0")
 
     except SQLAlchemyError as e:
         handle_database_error(e)

@@ -111,9 +111,9 @@ const Play = () => {
   );
 };
 
-const PlayRoute = () => <Route path="/play" render={() => <Play />} />;
 
-export default PlayRoute;
+
+export default Play;
 
 // import React, { useState } from 'react';
 // import Chess from 'react-chess';

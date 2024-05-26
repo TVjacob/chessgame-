@@ -38,7 +38,7 @@ const Home = ({ history, createNewGame }) => {
     window.location.href = url;
   };
   const handleClick = () => {
-    navigate("/play/history");
+    navigate("/live");
   };
 
   return (
@@ -101,7 +101,7 @@ const Home = ({ history, createNewGame }) => {
                   content={<SelectLevel handleOpen={handleShow} />}
                 />
               </div>
-              <a href="/play/computer" className="guest-button guest-link">
+              <a href="/play" className="guest-button guest-link">
                 <div className="playhand-icon computer-icon" />
                 <div>
                   <div className="guest-on-title">Play Computer</div>

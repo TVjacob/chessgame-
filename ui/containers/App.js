@@ -110,7 +110,7 @@ const App = () => {
 
   const handleLogin = async (formData) => {
     // try {
-    const response = await axios.post("/api/user/login", formData);
+    const response = await axios.post("http://localhost:5001" +"/api/user/login", formData);
     const data = response.data;
     if (data.success) {
       console.log("am herre  ....");
@@ -143,14 +143,14 @@ const App = () => {
   };
   const getRequest = (path, callback, errorCallback) => {
     axios
-      .get("http://localhost:5000" + path, { withCredentials: true })
+      .get("http://localhost:5001" + path, { withCredentials: true })
       .then(callback)
       .catch(errorCallback);
   };
 
   const postRequest = (path, data, callback, errorCallback) => {
     axios
-      .post("http://localhost:5000" + path, data, {
+      .post("http://localhost:5001" + path, data, {
         headers: {
           "content-type": "application/json",
           "X-CSRF-Token": csrfToken,
@@ -492,7 +492,7 @@ const App = () => {
 
     try {
       console.log(formData);
-      const response = await axios.post("/api/user/signup", formData);
+      const response = await axios.post("http://localhost:5001"+"/api/user/signup", formData);
       const data = response.data;
       if (data.success) {
         // Registration successful, set isRegistered to true
@@ -619,7 +619,8 @@ const App = () => {
               element={<Register onSignup={handleSignup} />}
             />
             <Route path="/signin" element={<Login onLogin={handleLogin} />} />
-            <Route path="/play" element={<PlayRoute />} />
+            <Route path="/play" element={<Play />} />
+            <Route path="/live" element={<Live />}/>
           </Routes>
         </div>
       </div>

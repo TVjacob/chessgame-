@@ -70,17 +70,22 @@ const Header = ({ user, router, logout }) => {
           className="nav-link-component chess-logo-wrapper sprite chess-logo"
           href="/"
         />
-        <a href="/register" className="button">
-          <span className="label">Sign Up</span>
+       {!user ?  <><a href="/register" className="button">
+         <span className="label">Sign Up</span>
         </a>
         <a href="/signin" className="button">
           <span className="label">Log In</span>
-        </a>
+        </a></>: 
+          <div className="profile">
+          <span className="user-profile"><i className="fa fa-user-circle" aria-hidden="true"></i></span>
+          <span className="label">{user.username}</span>
+         </div>
+        }
       </div>
       <div className="navs-menu">
         <a href="/search" className="nav-action">
           <div className="nav-toggle">
-            <i className="fas fa-search icon" />
+            <span className="bg-primary"><i className="fas fa-search icon" /></span>
             <span className="nav-link-text">Search</span>
           </div>
         </a>

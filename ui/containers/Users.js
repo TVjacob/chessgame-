@@ -7,6 +7,8 @@ import UserDisplay from "./UserDisplay.js";
 const Users = ({ user, knownUsers, onlineUsers, onOpen, createNewGame }) => {
   const [trayOpen, setTrayOpen] = useState(false);
 
+  console.log(user, "ok----")
+
   const renderSpectate = (otherUser) => {
     return (
       <Tooltip title="Spectate">
