@@ -18,19 +18,19 @@ module.exports = merge(common, {
     historyApiFallback: true,
     proxy: {
       "/api/*": {
-        target: "http://localhost:5000/",
+        target: "http://localhost:5001/",
         secure: false,
       },
       "/login": {
-        target: "http://localhost:5000/",
+        target: "http://localhost:5001/",
         secure: false,
       },
       "/logout": {
-        target: "http://localhost:5000/",
+        target: "http://localhost:5001/",
         secure: false,
       },
       "/socket.io": {
-        target: "http://localhost:5000/",
+        target: "http://localhost:5001/",
         secure: false,
       },
     },
